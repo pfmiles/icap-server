@@ -3,12 +3,12 @@ title: Extensible RFC-3507 (ICAP) Server Java/Kotlin Implementation
 message: Extensible ICAP Server Java/Kotlin Implementation
 type: software
 authors:
-  - given-names: Yue
-    email: miles.wy.1@gmail.com
-    orcid: 'https://orcid.org/0009-0003-4292-3487'
   - given-names: Claudiney
     email: contato@claudiney.dev
     orcid: 'https://orcid.org/0000-0002-9967-7614'
+  - given-names: Yue
+    email: miles.wy.1@gmail.com
+    orcid: 'https://orcid.org/0009-0003-4292-3487'
 repository-code: 'https://github.com/pfmiles/icap-server.git'
 abstract: Extensible RFC-3507 (ICAP) Server Java/Kotlin Implementation.
 keywords:
