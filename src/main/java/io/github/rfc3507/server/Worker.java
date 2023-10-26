@@ -1,5 +1,6 @@
 package io.github.rfc3507.server;
 
+import com.github.pfmiles.icapserver.Constants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -9,11 +10,22 @@ import java.net.Socket;
 import java.net.SocketException;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class Worker {
 
     private static final Logger logger = LoggerFactory.getLogger(Worker.class);
+    private static final AtomicLong seq = new AtomicLong();
+
+    private static final ExecutorService reqHandlePool = new ThreadPoolExecutor(1, Constants.INSTANCE.getWorkerPoolSize(),
+            60L, TimeUnit.SECONDS,
+            new SynchronousQueue<>(),
+            r -> new Thread(r, "icap-server-worker-thread-" + seq.getAndIncrement()));
 
     public static void main(String[] args) {
         new Worker().start();
@@ -27,14 +39,24 @@ public class Worker {
                 if (!serverSocket.isClosed()) {
                     serverSocket.close();
                 }
+                reqHandlePool.shutdown();
+                if (reqHandlePool.awaitTermination(5, TimeUnit.SECONDS)) {
+                    // terminates smoothly
+                    logger.info("All adaptation requests handling finished.");
+                } else {
+                    reqHandlePool.shutdownNow();
+                    logger.warn("Some of the adaptation jobs are still running, stopped forcibly.");
+                }
             } catch (IOException e) {
                 logger.error("Error when closing the server socket.", e);
+            } catch (InterruptedException e) {
+                logger.error("Shutdown waiting of request handling pool is interrupted, ignored...", e);
             }
             logger.info("[ICAP-SERVER] Service terminated.");
         });
         Runtime.getRuntime().addShutdownHook(shutdown);
 
-        Executors.newSingleThreadExecutor().submit(this::startService);
+        Executors.newSingleThreadExecutor(r -> new Thread(r, "icap-server-main-thread")).submit(this::startService);
     }
 
     public void stop() {
@@ -57,10 +79,10 @@ public class Worker {
     private void listen() throws IOException {
         // icap server port could be specified by OS environment variable 'ICAP_SERVER_PORT' or 'icap.server.port' system property, or else 1344 by default
         final String servicePort = Optional
-                .ofNullable(System.getenv("ICAP_SERVER_PORT"))
+                .ofNullable(System.getenv(Constants.PORT_ENV_VAR))
                 .orElse(Optional
-                        .ofNullable(System.getProperty("icap.server.port"))
-                        .orElse("1344"));
+                        .ofNullable(System.getProperty(Constants.PORT_PROP_VAR))
+                        .orElse(Constants.DFT_PORT));
 
         this.serverSocket = new ServerSocket(Integer.parseInt(servicePort));
 
@@ -79,9 +101,8 @@ public class Worker {
                 continue;
             }
 
-            CompletableFuture.runAsync(new ClientHandler(client));
+            CompletableFuture.runAsync(new ClientHandler(client), reqHandlePool);
         }
-
     }
 
 }
