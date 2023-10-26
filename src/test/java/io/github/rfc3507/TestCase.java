@@ -1,5 +1,15 @@
 package io.github.rfc3507;
 
+import io.github.rfc3507.server.Worker;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInstance;
+import org.junit.jupiter.api.TestInstance.Lifecycle;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Inet4Address;
@@ -8,20 +18,10 @@ import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.util.Random;
-import java.util.logging.Logger;
-
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.TestInstance;
-import org.junit.jupiter.api.TestInstance.Lifecycle;
-
-import io.github.rfc3507.server.Worker;
 
 @TestInstance(Lifecycle.PER_CLASS)
 public class TestCase {
-    final Logger logger = Logger.getLogger(getClass().getSimpleName());
+    private static final Logger logger = LoggerFactory.getLogger(TestCase.class);
 
     Worker worker;
 

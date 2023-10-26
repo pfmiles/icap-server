@@ -1,21 +1,23 @@
 package io.github.rfc3507.av.clamav;
 
+import org.apache.commons.io.IOUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.io.UnsupportedEncodingException;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
-import java.util.logging.Logger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import org.apache.commons.io.IOUtils;
-
 public class ClamAVCore {
+
+	private static final Logger logger = LoggerFactory.getLogger(ClamAVCore.class);
 
 	private final String id = UUID.randomUUID().toString();
 
@@ -57,7 +59,7 @@ public class ClamAVCore {
 	private ClamAVResponse scanContent(File file) throws ClamAVException {
 		final String path = file.getParent();
 
-		Logger.getGlobal().info("Scanning file: " + path + "/" + file.getName() + "...");
+		logger.info("Scanning file: " + path + "/" + file.getName() + "...");
 
 		final String testMode = System.getProperty("testMode");
 		final String[] command = "true".equals(testMode) 

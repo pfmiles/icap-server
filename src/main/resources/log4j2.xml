@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="warn">
+    <properties>
+        <property name="logging.level">info</property>
+        <!-- this path should be overridden by system property in production -->
+        <property name="logging.path">./logs</property>
+        <property name="app.path">${logging.path}/icapserver</property>
+        <property name="pattern">%d{HH:mm:ss.SSS} [%t] %-5level %c{2} - %m%n%throwable</property>
+        <property name="additivity">true</property>
+    </properties>
+    <Appenders>
+        <Console name="STDOUT-APPENDER" target="SYSTEM_OUT">
+            <PatternLayout pattern="${pattern}"/>
+            <ThresholdFilter level="DEBUG"/>
+        </Console>
+        <RollingFile name="APP-DEFAULT-APPENDER"
+                     fileName="${app.path}/default.log"
+                     filePattern="${app.path}/default.log.%d{yyyy-MM-dd}">
+            <PatternLayout pattern="${pattern}"/>
+            <TimeBasedTriggeringPolicy/>
+            <DefaultRolloverStrategy/>
+            <ThresholdFilter level="INFO"/>
+        </RollingFile>
+        <RollingFile name="APP-ERROR-APPENDER"
+                     fileName="${app.path}/error.log"
+                     filePattern="${app.path}/error.log.%d{yyyy-MM-dd}">
+            <PatternLayout pattern="${pattern}"/>
+            <TimeBasedTriggeringPolicy/>
+            <DefaultRolloverStrategy>
+                <Delete basePath="${app.path}">
+                    <IfFileName glob="*"/>
+                    <IfLastModified age="7d"/>
+                </Delete>
+            </DefaultRolloverStrategy>
+            <ThresholdFilter level="ERROR"/>
+        </RollingFile>
+    </Appenders>
+    <Loggers>
+        <AsyncRoot level="debug">
+            <AppenderRef ref="STDOUT-APPENDER"/>
+            <AppenderRef ref="APP-DEFAULT-APPENDER"/>
+            <AppenderRef ref="APP-ERROR-APPENDER"/>
+        </AsyncRoot>
+    </Loggers>
+</Configuration>
