@@ -1,25 +1,26 @@
 package io.github.rfc3507.server;
 
+import com.github.pfmiles.icapserver.impl.Constants;
+import com.github.pfmiles.icapserver.impl.Utils;
 import io.github.rfc3507.av.clamav.ClamAVCore;
 import io.github.rfc3507.av.clamav.ClamAVResponse;
 import io.github.rfc3507.av.windowsdefender.WindowsDefenderAntivirus;
 import io.github.rfc3507.av.windowsdefender.WindowsDefenderResponse;
+import org.apache.commons.io.IOUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.Inet4Address;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.Locale;
 import java.util.Optional;
-import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -27,48 +28,22 @@ public class ClientHandler implements Runnable {
 
     private static final Logger logger = LoggerFactory.getLogger(ClientHandler.class);
 
-    private Socket client;
+    private static final String serverName = Utils.INSTANCE.optsInOrDefault(Constants.SVR_NAME_ENV_VAR, Constants.SVR_NAME_PROPS_VAR, Constants.DFT_SVC_VAL);
+    private static final byte[] SERVICE_RESP_HEADER = ("Service: " + serverName + "\r\n").getBytes(StandardCharsets.US_ASCII);
+    private static final String SERVER_HEADER = "Server: " + serverName + "\r\n";
+    private static final String VIA_HEADER = "Via: " + serverName + "\r\n";
 
-    private InputStream in;
-    private OutputStream out;
-    private String serverName;
+    private static final String localIp = Constants.INSTANCE.getLOCAL_IP();
 
-    public ClientHandler(Socket c) {
-        this.client = c;
-        try {
-            serverName = Inet4Address.getLocalHost().getHostName();
-        } catch (IOException e) {
-            logger.warn("\n### SERVER ### [Startup] [WARNING]\n" + e.getMessage());
-            serverName = "localhost";
-        }
-    }
-
-    @Override
-    public void run() {
-
-        try {
-            in = client.getInputStream();
-            out = client.getOutputStream();
-            handle();
-            out.close();
-            in.close();
-        } catch (IOException e) {
-            logger.warn("\n### SERVER ### [Cleanup] [WARNING] General error:\n" + e.getMessage());
-        }
-
-        try {
-            client.close();
-        } catch (IOException e) {
-            logger.warn("\n### SERVER ### [Cleanup] [WARNING] General error:\n" + e.getMessage());
-        }
-
-        logger.info("\n### SERVER ### [Cleanup] [INFO] Client request completed.\n");
-
-    }
-
+    // TODO methods may extend in future
     private static final String OPTIONS = "OPTIONS";
     private static final String REQMOD = "REQMOD";
     private static final String RESPMOD = "RESPMOD";
+
+    private final Socket socket;
+
+    private InputStream in;
+    private OutputStream out;
 
     private String methodInProgress = null;
     private String serviceInProgress = null;
@@ -81,9 +56,29 @@ public class ClientHandler implements Runnable {
     private ByteArrayOutputStream httpResponseHeaders = null;
     private ByteArrayOutputStream httpResponseBody = null;
 
+    public ClientHandler(Socket c) {
+        this.socket = c;
+    }
+
+    @Override
+    public void run() {
+        try {
+            in = socket.getInputStream();
+            out = socket.getOutputStream();
+            handle();
+            logger.info("Client request completed.");
+        } catch (IOException e) {
+            logger.error("IO Exception when processing client request, processing terminated.", e);
+        } finally {
+            IOUtils.closeQuietly(out, ioe -> logger.warn("Closing socket output stream error, ignored...", ioe));
+            IOUtils.closeQuietly(in, ioe -> logger.warn("Closing socket input stream error, ignored...", ioe));
+            IOUtils.closeQuietly(socket, ioe -> logger.warn("Closing client socket error, ignored...", ioe));
+        }
+    }
+
     private void handle() throws IOException {
 
-        while (true) {
+        while (true) { // label: handleStart
 
             httpRequestHeaders = new ByteArrayOutputStream();
             httpRequestBody = new ByteArrayOutputStream();
@@ -93,43 +88,44 @@ public class ClientHandler implements Runnable {
             methodInProgress = null;
 
             try {
-                startHandleIcapRequest();
+                handleIcapRequestHeaders();
                 if (methodInProgress != null) {
-                    continueHandleIcapRequest();
+                    handleEncapsulatedMessage();
                 }
                 out.flush();
-            } catch (IOException e) {
-                e.printStackTrace();
-                break;
             } catch (Exception e) {
+                logger.error("Error when processing icap request, process for this request terminated.", e);
                 sendServerError(e.getMessage());
             }
 
-            if (OPTIONS.equals(methodInProgress)) {
-                continue;
+            if (OPTIONS.equals(methodInProgress)) { // TODO what if 'too many OPTIONS' attack?
+                continue; // goto: handleStart
             }
             break;
         }
 
     }
 
-    private void startHandleIcapRequest() throws Exception {
+    // processing icap-request related headers
+    private void handleIcapRequestHeaders() throws Exception {
 
         ByteArrayOutputStream cache = new ByteArrayOutputStream();
 
+        // TODO: to detect the first CRLF, this logic requires a more elegant way
         int reader = -1;
         while ((reader = in.read()) != -1) {
 
             cache.write(reader);
 
             byte[] memory = cache.toByteArray();
+            // CRLF encountered, analyze icap headers
             if (memory.length >= 4) {
                 if (memory[memory.length - 4] == '\r'
                         && memory[memory.length - 3] == '\n'
                         && memory[memory.length - 2] == '\r'
                         && memory[memory.length - 1] == '\n') {
 
-                    analyseRequestHeader(memory);
+                    analyseIcapRequestHeader(memory);
                     break;
 
                 }
@@ -139,10 +135,12 @@ public class ClientHandler implements Runnable {
 
     }
 
-    private void continueHandleIcapRequest() throws Exception {
+    // icap request headers processed, continue to process further REQMOD/RESPMOD request body
+    private void handleEncapsulatedMessage() throws Exception {
 
         extractEncapsulatedPayloads();
 
+        // OPTIONS is already handled in 'startHandleIcapRequest', so REQMOD/RESPMOD only here
         if (REQMOD.equals(methodInProgress)) {
             continueRequestModification();
         } else if (RESPMOD.equals(methodInProgress)) {
@@ -151,8 +149,10 @@ public class ClientHandler implements Runnable {
 
     }
 
+    // parse the encapsulated http messages
     private void extractEncapsulatedPayloads() throws Exception {
 
+        // the encapsulated http headers' size
         int httpRequestHeaderSize = 0;
         int httpResponseHeaderSize = 0;
 
@@ -162,9 +162,10 @@ public class ClientHandler implements Runnable {
 
         String[] encapsulatedValues = encapsulatedHeader.split(",");
 
+        // compute encapsulated http headers' size in 'Encapsulated' header value, for example: 'req-hdr=0, res-hdr=822, res-body=1655'
         for (String offset : encapsulatedValues) {
 
-            String offsetParser[] = offset.split("=");
+            String[] offsetParser = offset.split("=");
 
             String offsetLabel = offsetParser[0].trim();
 
@@ -187,17 +188,17 @@ public class ClientHandler implements Runnable {
 
         }
 
-        byte[] parseContent = null;
+        byte[] parseContent;
 
         if (httpRequestHeaderSize > 0) {
             parseContent = new byte[httpRequestHeaderSize];
-            readStream(parseContent);
+            IOUtils.readFully(in, parseContent);
             httpRequestHeaders.write(parseContent);
         }
 
         if (httpResponseHeaderSize > 0) {
             parseContent = new byte[httpResponseHeaderSize];
-            readStream(parseContent);
+            IOUtils.readFully(in, parseContent);
             httpResponseHeaders.write(parseContent);
         }
 
@@ -211,79 +212,83 @@ public class ClientHandler implements Runnable {
 
     }
 
-    private void readBody(OutputStream out) throws Exception {
+    private void readBody(OutputStream bodyData) throws Exception {
 
-        boolean previewIsEnough = false;
+        boolean terminateWhilePreview = false;
 
         if (previewHeader != null) {
             /*
              * Read preview payload
              */
-            int contentPreview = Integer.parseInt(previewHeader);
-            previewIsEnough = extractBody(out, contentPreview);
-            if (!previewIsEnough) {
+            int expPreviewLength = Integer.parseInt(previewHeader);
+            // actual preview data sent by client may be less than it claimed in the 'Preview' header
+            terminateWhilePreview = extractBody(bodyData, expPreviewLength);
+            if (!terminateWhilePreview) {
                 sendContinue();
             }
         }
 
-        if (!previewIsEnough) {
+        if (!terminateWhilePreview) {
             /*
              * Read remaining body payload
              */
-            extractBody(out, -1);
+            extractBody(bodyData, -1);
         }
 
     }
 
-    private boolean extractBody(OutputStream out, int previewSize) throws Exception {
+    // @return whether the preview data is all the message body about
+    // TODO preview feature is not implemented
+    private boolean extractBody(OutputStream bodyData, int previewSize) throws Exception {
 
         ByteArrayOutputStream backupDebug = new ByteArrayOutputStream();
 
-        StringBuilder line = new StringBuilder("");
+        // the hex representation of chunk size
+        StringBuilder chunkSizeHexStr = new StringBuilder();
 
-        byte[] cache = null;
+        int[] mark = new int[2];
+        Arrays.fill(mark, -1);
 
-        int mark[] = new int[2];
-        reset(mark);
-
-        StringBuilder control = new StringBuilder("");
+        StringBuilder control = new StringBuilder();
 
         while (true) {
 
-            int reader = in.read();
-            shift(mark);
-            mark[1] = reader;
+            int nextChar = in.read();
+            shiftLeftByOne(mark);
+            mark[1] = nextChar;
 
-            backupDebug.write(reader);
+            backupDebug.write(nextChar);
 
-            control.append((char) reader);
+            control.append((char) nextChar);
 
-            if (reader == ';') {
+            // try reading preview-specific 'ieof' chunk start
+            if (nextChar == ';') {
                 continue;
             }
 
-            if (reader == ' ' || reader == 'i') {
+            if (nextChar == ' ' || nextChar == 'i') {
                 continue;
             }
 
-            if (reader == 'e') {
+            if (nextChar == 'e') {
                 if (control.toString().equals("0; ie")) {
                     continue;
                 }
             }
 
-            if (reader == 'f') {
+            if (nextChar == 'f') {
                 if (control.toString().equals("0; ieof")) {
                     continue;
                 }
             }
+            // try reading preview-specific 'ieof' chunk end
 
-            if (reader == '\r') {
+            if (nextChar == '\r') {
                 continue;
             }
 
-            if (mark[0] == '\r'
-                    && mark[1] == '\n') {
+            // when a CRLF encountered
+            if (mark[0] == '\r' && mark[1] == '\n') {
 
                 if (control.toString().equals("0; ieof\r\n\r\n")) {
                     return true;
@@ -293,19 +298,20 @@ public class ClientHandler implements Runnable {
                     continue;
                 }
 
-                if (line.length() == 0) {
+                if (chunkSizeHexStr.length() == 0) {
                     return false;
                 }
 
-                int amountRead = Integer.parseInt(line.toString(), 16);
-
-                if (amountRead > 0) {
-                    cache = new byte[amountRead];
-                    readStream(cache);
-                    out.write(cache);
+                // read the data chunk according to the chunk size
+                int amountToRead = Integer.parseInt(chunkSizeHexStr.toString(), 16);
+                if (amountToRead > 0) {
+                    byte[] cache = new byte[amountToRead];
+                    IOUtils.readFully(in, cache);
+                    bodyData.write(cache);
                     backupDebug.write(cache);
                 }
 
+                // consume the CRLF after: a chunk of data/last empty chunk
                 int cr = -1, lf = -1;
                 cr = in.read();
                 lf = in.read();
@@ -316,9 +322,11 @@ public class ClientHandler implements Runnable {
                     throw new Exception("Error reading end of chunk");
                 }
 
-                if (amountRead > 0) {
-                    control = new StringBuilder("");
+                if (amountToRead > 0) {
+                    // after previous chunk data read, the control string reset
+                    control = new StringBuilder();
                 } else {
+                    // append the last CRLF after a last empty chunk
                     control.append((char) cr);
                     control.append((char) lf);
                 }
@@ -327,19 +335,19 @@ public class ClientHandler implements Runnable {
                     return false;
                 }
 
-                line = new StringBuilder("");
+                chunkSizeHexStr.setLength(0);
 
                 continue;
 
             }
 
-            line.append((char) reader);
+            chunkSizeHexStr.append((char) nextChar);
 
         }
 
     }
 
-    private void analyseRequestHeader(byte[] memory) throws Exception {
+    private void analyseIcapRequestHeader(byte[] memory) throws Exception {
 
         String data = new String(memory);
 
@@ -351,18 +359,19 @@ public class ClientHandler implements Runnable {
         }
 
         String methodLine = entries[0];
-        String methodLine2 = methodLine.toUpperCase();
+        String methodLineUpper = methodLine.toUpperCase();
 
-        if (!methodLine2.startsWith(OPTIONS)
-                && !methodLine2.startsWith(REQMOD)
-                && !methodLine2.startsWith(RESPMOD)) {
+        // TODO method would be extensible
+        if (!methodLineUpper.startsWith(OPTIONS)
+                && !methodLineUpper.startsWith(REQMOD)
+                && !methodLineUpper.startsWith(RESPMOD)) {
             sendMethodNotAllowed();
             return;
         }
 
-        if (!methodLine2.startsWith(OPTIONS + " ")
-                && !methodLine2.startsWith(REQMOD + " ")
-                && !methodLine2.startsWith(RESPMOD + " ")) {
+        if (!methodLineUpper.startsWith(OPTIONS + " ")
+                && !methodLineUpper.startsWith(REQMOD + " ")
+                && !methodLineUpper.startsWith(RESPMOD + " ")) {
             sendBadRequest("Invalid ICAP Method Sintax");
             return;
         }
@@ -375,6 +384,7 @@ public class ClientHandler implements Runnable {
         }
 
         String uri = methodContent[1];
+        // [server, path&query]
         String[] uriParser = validateURI(uri);
 
         if (uriParser == null) {
@@ -382,6 +392,7 @@ public class ClientHandler implements Runnable {
             return;
         }
 
+        // parse headers exception start line, TODO more icap request headers to be supported
         for (int i = 1; i < entries.length; ++i) {
             String icapHeader = entries[i];
             if (icapHeader.toLowerCase().startsWith("encapsulated:")) {
@@ -408,17 +419,18 @@ public class ClientHandler implements Runnable {
             }
         }
 
-        if (methodLine2.startsWith(OPTIONS)) {
+        // TODO methods should be extensible
+        if (methodLineUpper.startsWith(OPTIONS)) {
 
             handleOptions(entries, uriParser);
 
-        } else if (methodLine2.startsWith(REQMOD)) {
+        } else if (methodLineUpper.startsWith(REQMOD)) {
 
-            handleRequestModification(entries, uriParser);
+            prepareHandleRequestModification(entries, uriParser);
 
-        } else if (methodLine2.startsWith(RESPMOD)) {
+        } else if (methodLineUpper.startsWith(RESPMOD)) {
 
-            handleResponseModification(entries, uriParser);
+            prepareHandleResponseModification(entries, uriParser);
 
         }
 
@@ -477,6 +489,7 @@ public class ClientHandler implements Runnable {
         }
     }
 
+    // returns: String[server, path]
     private String[] validateURI(String uri) {
 
         Pattern uriPattern = Pattern.compile("icap:\\/\\/(.*)(\\/.*)");
@@ -501,6 +514,7 @@ public class ClientHandler implements Runnable {
         String service = uriParser[1];
         String service2 = service.toLowerCase();
 
+        // TODO endpoints should be extensible
         if (!service2.startsWith("info")
                 && !service2.startsWith("echo")
                 && !service2.startsWith("virus_scan")) {
@@ -514,8 +528,9 @@ public class ClientHandler implements Runnable {
 
         out.write(("ICAP/1.0 200 OK\r\n").getBytes(StandardCharsets.US_ASCII));
         out.write(("Date: " + date + "\r\n").getBytes(StandardCharsets.US_ASCII));
-        out.write(("Server: " + serverName + "\r\n").getBytes(StandardCharsets.US_ASCII));
+        out.write(SERVER_HEADER.getBytes(StandardCharsets.US_ASCII));
 
+        // TODO endpoints and method could be extensible
         if (service2.startsWith("info")) {
             out.write(("Methods: " + RESPMOD + "\r\n").getBytes(StandardCharsets.US_ASCII));
         } else if (service2.startsWith("echo")) {
@@ -524,9 +539,11 @@ public class ClientHandler implements Runnable {
             out.write(("Methods: " + REQMOD + ", " + RESPMOD + "\r\n").getBytes(StandardCharsets.US_ASCII));
         }
 
-        out.write(("Service: ICAP-Server-Java/1.0\r\n").getBytes(StandardCharsets.US_ASCII));
-        out.write(("ISTag:\"" + UUID.randomUUID().toString() + "\"\r\n").getBytes(StandardCharsets.US_ASCII));
+        out.write(SERVICE_RESP_HEADER);
+        // TODO ISTag is somewhat a session mechanism, not only a random string
+        out.write(("ISTag:\"" + Utils.INSTANCE.randomUUID32Chars() + "\"\r\n").getBytes(StandardCharsets.US_ASCII));
         out.write(("Allow: 204\r\n").getBytes(StandardCharsets.US_ASCII));
+        // TODO preview data should be supported in future
         out.write(("Preview: 0\r\n").getBytes(StandardCharsets.US_ASCII));
         out.write(("Transfer-Complete: *\r\n").getBytes(StandardCharsets.US_ASCII));
         out.write(("Encapsulated: null-body=0\r\n").getBytes(StandardCharsets.US_ASCII));
@@ -536,13 +553,14 @@ public class ClientHandler implements Runnable {
 
     }
 
-    private void handleRequestModification(
+    private void prepareHandleRequestModification(
             String[] entries,
             String[] uriParser) throws Exception {
 
         String service = uriParser[1];
         String service2 = service.toLowerCase();
 
+        // TODO endpoints should be extensible, the error msg reported here is not accurate
         if (!service2.startsWith("echo")
                 && !service2.startsWith("virus_scan")) {
 
@@ -556,13 +574,14 @@ public class ClientHandler implements Runnable {
 
     }
 
-    private void handleResponseModification(
+    private void prepareHandleResponseModification(
             String[] entries,
             String[] uriParser) throws Exception {
 
         String service = uriParser[1];
         String service2 = service.toLowerCase();
 
+        // TODO endpoints should be extensible, the error msg reported here is not accurate
         if (!service2.startsWith("info")
                 && !service2.startsWith("echo")
                 && !service2.startsWith("virus_scan")) {
@@ -585,6 +604,8 @@ public class ClientHandler implements Runnable {
 
         String date = new SimpleDateFormat("EEE, d MMM yyyy HH:mm:ss Z", Locale.US).format(new Date());
 
+        // TODO endpoints should be extensible in future
+
         if (serviceInProgress.startsWith("echo") && httpRequestBody.size() == 0) {
             out.write(("ICAP/1.0 204 No Content\r\n").getBytes(StandardCharsets.US_ASCII));
         } else {
@@ -592,8 +613,8 @@ public class ClientHandler implements Runnable {
         }
 
         out.write(("Date: " + date + "\r\n").getBytes(StandardCharsets.US_ASCII));
-        out.write(("Server: " + serverName + "\r\n").getBytes(StandardCharsets.US_ASCII));
-        out.write(("ISTag:\"ALPHA-B123456-GAMA\"\r\n").getBytes(StandardCharsets.US_ASCII));
+        out.write(SERVER_HEADER.getBytes(StandardCharsets.US_ASCII));
+        out.write(("ISTag:\"" + Utils.INSTANCE.randomUUID32Chars() + "\"\r\n").getBytes(StandardCharsets.US_ASCII));
         out.write(("Connection: close\r\n").getBytes(StandardCharsets.US_ASCII));
 
         if (serviceInProgress.startsWith("echo")) {
@@ -612,19 +633,17 @@ public class ClientHandler implements Runnable {
 
         String date = new SimpleDateFormat("EEE, d MMM yyyy HH:mm:ss Z", Locale.US).format(new Date());
 
+        // TODO endpoints should be extensible in future
+
         if (serviceInProgress.startsWith("echo") && httpResponseBody.size() == 0) {
-
             out.write(("ICAP/1.0 204 No Content\r\n").getBytes(StandardCharsets.US_ASCII));
-
         } else {
-
             out.write(("ICAP/1.0 200 OK\r\n").getBytes(StandardCharsets.US_ASCII));
-
         }
 
         out.write(("Date: " + date + "\r\n").getBytes(StandardCharsets.US_ASCII));
-        out.write(("Server: " + serverName + "\r\n").getBytes(StandardCharsets.US_ASCII));
-        out.write(("ISTag: \"ALPHA-B123456-GAMA\"\r\n").getBytes(StandardCharsets.US_ASCII));
+        out.write(SERVER_HEADER.getBytes(StandardCharsets.US_ASCII));
+        out.write(("ISTag: \"" + Utils.INSTANCE.randomUUID32Chars() + "\"\r\n").getBytes(StandardCharsets.US_ASCII));
         out.write(("Connection: close\r\n").getBytes(StandardCharsets.US_ASCII));
 
         if (serviceInProgress.startsWith("info")) {
@@ -641,16 +660,16 @@ public class ClientHandler implements Runnable {
 
         StringBuilder httpResponseBody = new StringBuilder();
 
-        httpResponseBody.append("OPTIONS icap://" + serverName + "/info ICAP/1.0\r\n");
-        httpResponseBody.append("OPTIONS icap://" + serverName + "/echo ICAP/1.0\r\n");
-        httpResponseBody.append("OPTIONS icap://" + serverName + "/virus_scan ICAP/1.0\r\n");
+        httpResponseBody.append("OPTIONS icap://" + localIp + "/info ICAP/1.0\r\n");
+        httpResponseBody.append("OPTIONS icap://" + localIp + "/echo ICAP/1.0\r\n");
+        httpResponseBody.append("OPTIONS icap://" + localIp + "/virus_scan ICAP/1.0\r\n");
 
-        httpResponseBody.append("REQMOD icap://" + serverName + "/echo ICAP/1.0\r\n");
-        httpResponseBody.append("REQMOD icap://" + serverName + "/virus_scan ICAP/1.0\r\n");
+        httpResponseBody.append("REQMOD icap://" + localIp + "/echo ICAP/1.0\r\n");
+        httpResponseBody.append("REQMOD icap://" + localIp + "/virus_scan ICAP/1.0\r\n");
 
-        httpResponseBody.append("RESPMOD icap://" + serverName + "/info ICAP/1.0\r\n");
-        httpResponseBody.append("RESPMOD icap://" + serverName + "/echo ICAP/1.0\r\n");
-        httpResponseBody.append("RESPMOD icap://" + serverName + "/virus_scan ICAP/1.0\r\n");
+        httpResponseBody.append("RESPMOD icap://" + localIp + "/info ICAP/1.0\r\n");
+        httpResponseBody.append("RESPMOD icap://" + localIp + "/echo ICAP/1.0\r\n");
+        httpResponseBody.append("RESPMOD icap://" + localIp + "/virus_scan ICAP/1.0\r\n");
 
         httpResponseBody.append("\r\n");
 
@@ -663,10 +682,10 @@ public class ClientHandler implements Runnable {
 
         httpResponseHeader.append("HTTP/1.1 200 OK\r\n");
         httpResponseHeader.append(("Date: " + date + "\r\n"));
-        httpResponseHeader.append(("Server: " + serverName + "\r\n"));
+        httpResponseHeader.append((SERVER_HEADER));
         httpResponseHeader.append(("Content-Type: text/plain\r\n"));
         httpResponseHeader.append(("Content-Length: " + httpResponseBody.length() + "\r\n"));
-        httpResponseHeader.append(("Via: 1.0 " + serverName + "\r\n"));
+        httpResponseHeader.append(VIA_HEADER);
         httpResponseHeader.append("\r\n");
 
         out.write(("Encapsulated: res-hdr=0, res-body=" + httpResponseHeader.length() + "\r\n").getBytes(StandardCharsets.US_ASCII));
@@ -767,7 +786,7 @@ public class ClientHandler implements Runnable {
             outHttpResponseHeaders.write("HTTP/1.1 200 OK\r\n".getBytes(StandardCharsets.US_ASCII));
         }
 
-        outHttpResponseHeaders.write(("Server: " + serverName + "\r\n").getBytes(StandardCharsets.US_ASCII));
+        outHttpResponseHeaders.write(SERVER_HEADER.getBytes(StandardCharsets.US_ASCII));
 
         StringBuilder responseMessage = new StringBuilder("");
 
@@ -784,7 +803,7 @@ public class ClientHandler implements Runnable {
 
         }
 
-        outHttpResponseHeaders.write(("Via: " + serverName + "\r\n").getBytes(StandardCharsets.US_ASCII));
+        outHttpResponseHeaders.write(VIA_HEADER.getBytes(StandardCharsets.US_ASCII));
 
         if (icapThreatsHeader.size() > 0) {
             outHttpResponseHeaders.write(icapThreatsHeader.toByteArray());
@@ -913,33 +932,7 @@ public class ClientHandler implements Runnable {
 
     //----------------------------------------
 
-    private void readStream(byte[] out) throws IOException {
-
-        byte[] reading = null;
-        ByteArrayOutputStream cache = new ByteArrayOutputStream();
-
-        int total = out.length;
-        while (total > 0) {
-            int amount = total;
-            int available = in.available();
-            if (amount > available) {
-                amount = available;
-            }
-            reading = new byte[amount];
-            in.read(reading);
-            cache.write(reading);
-            total -= amount;
-        }
-
-        new ByteArrayInputStream(cache.toByteArray()).read(out);
-
-    }
-
-    private static void reset(int[] c) {
-        for (int i = 0; i < c.length; ++i) c[i] = -1;
-    }
-
-    private static void shift(int[] c) {
+    private static void shiftLeftByOne(int[] c) {
         for (int i = 1; i < c.length; ++i) c[i - 1] = c[i];
     }
 

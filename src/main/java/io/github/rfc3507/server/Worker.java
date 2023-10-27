@@ -1,6 +1,7 @@
 package io.github.rfc3507.server;
 
-import com.github.pfmiles.icapserver.Constants;
+import com.github.pfmiles.icapserver.impl.Constants;
+import com.github.pfmiles.icapserver.impl.Utils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -8,7 +9,6 @@ import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -22,7 +22,7 @@ public class Worker {
     private static final Logger logger = LoggerFactory.getLogger(Worker.class);
     private static final AtomicLong seq = new AtomicLong();
 
-    private static final ExecutorService reqHandlePool = new ThreadPoolExecutor(1, Constants.INSTANCE.getWorkerPoolSize(),
+    private static final ExecutorService reqHandlePool = new ThreadPoolExecutor(1, Constants.INSTANCE.getWORKER_POOL_SIZE(),
             60L, TimeUnit.SECONDS,
             new SynchronousQueue<>(),
             r -> new Thread(r, "icap-server-worker-thread-" + seq.getAndIncrement()));
@@ -53,7 +53,7 @@ public class Worker {
                 logger.error("Shutdown waiting of request handling pool is interrupted, ignored...", e);
             }
             logger.info("[ICAP-SERVER] Service terminated.");
-        });
+        }, "icap-server-shutdown-hook");
         Runtime.getRuntime().addShutdownHook(shutdown);
 
         Executors.newSingleThreadExecutor(r -> new Thread(r, "icap-server-main-thread")).submit(this::startService);
@@ -78,11 +78,7 @@ public class Worker {
 
     private void listen() throws IOException {
         // icap server port could be specified by OS environment variable 'ICAP_SERVER_PORT' or 'icap.server.port' system property, or else 1344 by default
-        final String servicePort = Optional
-                .ofNullable(System.getenv(Constants.PORT_ENV_VAR))
-                .orElse(Optional
-                        .ofNullable(System.getProperty(Constants.PORT_PROP_VAR))
-                        .orElse(Constants.DFT_PORT));
+        final String servicePort = Utils.INSTANCE.optsInOrDefault(Constants.PORT_ENV_VAR, Constants.PORT_PROP_VAR, Constants.DFT_PORT);
 
         this.serverSocket = new ServerSocket(Integer.parseInt(servicePort));
 
