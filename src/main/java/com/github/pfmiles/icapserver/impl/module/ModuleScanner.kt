@@ -1,4 +1,4 @@
-package com.github.pfmiles.icapserver.impl
+package com.github.pfmiles.icapserver.impl.module
 
 import com.github.pfmiles.icapserver.Module
 import org.reflections.ReflectionUtils
@@ -11,6 +11,8 @@ import org.slf4j.LoggerFactory
 
 /**
  * Scan icap-server modules in the whole classpath, under a specified base package.
+ *
+ * TODO may be the module mechanism should compatible with the e-cap standard: https://www.e-cap.org/
  *
  * @author pf-miles
  */

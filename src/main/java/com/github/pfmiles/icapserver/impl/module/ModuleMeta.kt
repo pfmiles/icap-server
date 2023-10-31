@@ -1,4 +1,4 @@
-package com.github.pfmiles.icapserver.impl
+package com.github.pfmiles.icapserver.impl.module
 
 /**
  * Module meta

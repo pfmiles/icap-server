@@ -88,7 +88,7 @@ public class ClamAVCore {
 			throw new ClamAVException(e.getMessage());
 		}
 
-		final String checkResult = new String(response.toByteArray(), StandardCharsets.US_ASCII);
+		final String checkResult = new String(response.toByteArray(), StandardCharsets.UTF_8);
 
 		final Pattern pattern = Pattern.compile(
 				"\\s(\\S*)\\sFOUND$",

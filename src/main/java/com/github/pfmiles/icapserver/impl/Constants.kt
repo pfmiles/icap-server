@@ -31,7 +31,7 @@ internal object Constants {
     /**
      * the local ip address, picking the randomly first one, special ips like '127.0.0.1' as such are bypassed
      */
-    val LOCAL_IP = Utils.resolveLocalIps().first()
+    val LOCAL_IP: String = Utils.resolveLocalIps().first()
 
     /**
      * scanning base package of all standard modules
@@ -52,4 +52,14 @@ internal object Constants {
      * the default value of OPTIONS response's 'Service' header
      */
     const val DFT_SVC_VAL = "ICAP-Server/1.0"
+
+    /**
+     * the last chunk of http 1.1 chunked encoding, also used in icap protocol encapsulated http message body transfer
+     */
+    const val CHUNK_END = "0\r\n\r\n"
+
+    /**
+     * icap's http chunk-extension to indicate a data transmission termination during a process of preview
+     */
+    const val ICAP_PREV_TERMINATE = "0; ieof\r\n\r\n"
 }

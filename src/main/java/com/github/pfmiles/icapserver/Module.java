@@ -22,4 +22,14 @@ public @interface Module {
      * @return the endpoint of the defining module, must be specified.
      */
     String value() default "";
+
+    /**
+     * Setting the size of message preview of the server expected.
+     * Set to 0 means the server do not support preview functionality.
+     * <p>
+     * default: 0, aka the preview functionality is disabled.
+     *
+     * @return message preview size
+     */
+    int messagePreview() default 0;
 }

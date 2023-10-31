@@ -1,5 +1,6 @@
 package io.github.rfc3507.server;
 
+import com.github.pfmiles.icapserver.impl.ClientCapabilities;
 import com.github.pfmiles.icapserver.impl.Constants;
 import com.github.pfmiles.icapserver.impl.Utils;
 import io.github.rfc3507.av.clamav.ClamAVCore;
@@ -29,7 +30,7 @@ public class ClientHandler implements Runnable {
     private static final Logger logger = LoggerFactory.getLogger(ClientHandler.class);
 
     private static final String serverName = Utils.INSTANCE.optsInOrDefault(Constants.SVR_NAME_ENV_VAR, Constants.SVR_NAME_PROPS_VAR, Constants.DFT_SVC_VAL);
-    private static final byte[] SERVICE_RESP_HEADER = ("Service: " + serverName + "\r\n").getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] SERVICE_RESP_HEADER = ("Service: " + serverName + "\r\n").getBytes(StandardCharsets.UTF_8);
     private static final String SERVER_HEADER = "Server: " + serverName + "\r\n";
     private static final String VIA_HEADER = "Via: " + serverName + "\r\n";
 
@@ -52,9 +53,14 @@ public class ClientHandler implements Runnable {
     private String previewHeader = null;
 
     private ByteArrayOutputStream httpRequestHeaders = null;
+    // TODO http req body is fully read in mem, should be streaming processed
     private ByteArrayOutputStream httpRequestBody = null;
+
     private ByteArrayOutputStream httpResponseHeaders = null;
+    // TODO http resp body is fully read in mem, should be streaming processed
     private ByteArrayOutputStream httpResponseBody = null;
+
+    private ClientCapabilities clientCaps;
 
     public ClientHandler(Socket c) {
         this.socket = c;
@@ -111,7 +117,7 @@ public class ClientHandler implements Runnable {
 
         ByteArrayOutputStream cache = new ByteArrayOutputStream();
 
-        // TODO: to detect the first CRLF, this logic requires a more elegant way
+        // TODO: to detect the first CRLF, this logic requires a more elegant way, at least not to hang when malformed request received
         int reader = -1;
         while ((reader = in.read()) != -1) {
 
@@ -251,6 +257,7 @@ public class ClientHandler implements Runnable {
 
         StringBuilder control = new StringBuilder();
 
+        // TODO the payload parsing progress need to be refactored
         while (true) {
 
             int nextChar = in.read();
@@ -290,7 +297,7 @@ public class ClientHandler implements Runnable {
             // when a CRLF encountered
             if (mark[0] == '\r' && mark[1] == '\n') {
 
-                if (control.toString().equals("0; ieof\r\n\r\n")) {
+                if (control.toString().equals(Constants.ICAP_PREV_TERMINATE)) {
                     return true;
                 }
 
@@ -331,7 +338,7 @@ public class ClientHandler implements Runnable {
                     control.append((char) lf);
                 }
 
-                if (control.toString().equals("0\r\n\r\n")) {
+                if (control.toString().equals(Constants.CHUNK_END)) {
                     return false;
                 }
 
@@ -436,56 +443,56 @@ public class ClientHandler implements Runnable {
 
     }
 
-    private void finishResponse() throws IOException {
-        out.write("0\r\n\r\n".getBytes(StandardCharsets.US_ASCII));
+    private void writeFinalChunk() throws IOException {
+        out.write(Constants.CHUNK_END.getBytes(StandardCharsets.UTF_8));
     }
 
     private void sendCloseConnection() throws IOException {
-        out.write("Connection: close\r\n".getBytes(StandardCharsets.US_ASCII));
-        out.write(("Encapsulated: null-body=0\r\n").getBytes(StandardCharsets.US_ASCII));
-        out.write("\r\n".getBytes(StandardCharsets.US_ASCII));
+        out.write("Connection: close\r\n".getBytes(StandardCharsets.UTF_8));
+        out.write(("Encapsulated: null-body=0\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write("\r\n".getBytes(StandardCharsets.UTF_8));
     }
 
     private void sendContinue() throws IOException {
-        out.write("ICAP/1.0 100 Continue\r\n".getBytes(StandardCharsets.US_ASCII));
-        out.write("\r\n".getBytes(StandardCharsets.US_ASCII));
+        out.write("ICAP/1.0 100 Continue\r\n".getBytes(StandardCharsets.UTF_8));
+        out.write("\r\n".getBytes(StandardCharsets.UTF_8));
     }
 
     private void sendBadRequest(String cause) throws IOException {
-        out.write("ICAP/1.0 400 Bad request\r\n".getBytes(StandardCharsets.US_ASCII));
+        out.write("ICAP/1.0 400 Bad request\r\n".getBytes(StandardCharsets.UTF_8));
         if (cause == null) {
             sendCloseConnection();
         } else {
-            out.write("Connection: close\r\n".getBytes(StandardCharsets.US_ASCII));
-            out.write(("Encapsulated: opt-body=0\r\n").getBytes(StandardCharsets.US_ASCII));
-            out.write("\r\n".getBytes(StandardCharsets.US_ASCII));
-            out.write((Integer.toHexString(cause.length()) + "\r\n").getBytes(StandardCharsets.US_ASCII));
-            out.write((cause + "\r\n").getBytes(StandardCharsets.US_ASCII));
-            finishResponse();
+            out.write("Connection: close\r\n".getBytes(StandardCharsets.UTF_8));
+            out.write(("Encapsulated: opt-body=0\r\n").getBytes(StandardCharsets.UTF_8));
+            out.write("\r\n".getBytes(StandardCharsets.UTF_8));
+            out.write((Integer.toHexString(cause.length()) + "\r\n").getBytes(StandardCharsets.UTF_8));
+            out.write((cause + "\r\n").getBytes(StandardCharsets.UTF_8));
+            writeFinalChunk();
         }
     }
 
     private void sendServiceNotFound() throws IOException {
-        out.write("ICAP/1.0 404 Service not found\r\n".getBytes(StandardCharsets.US_ASCII));
+        out.write("ICAP/1.0 404 Service not found\r\n".getBytes(StandardCharsets.UTF_8));
         sendCloseConnection();
     }
 
     private void sendMethodNotAllowed() throws IOException {
-        out.write("ICAP/1.0 405 Method not allowed\r\n".getBytes(StandardCharsets.US_ASCII));
+        out.write("ICAP/1.0 405 Method not allowed\r\n".getBytes(StandardCharsets.UTF_8));
         sendCloseConnection();
     }
 
     private void sendServerError(String cause) throws IOException {
-        out.write("ICAP/1.0 500 Server Error\r\n".getBytes(StandardCharsets.US_ASCII));
+        out.write("ICAP/1.0 500 Server Error\r\n".getBytes(StandardCharsets.UTF_8));
         if (cause == null) {
             sendCloseConnection();
         } else {
-            out.write("Connection: close\r\n".getBytes(StandardCharsets.US_ASCII));
-            out.write(("Encapsulated: opt-body=0\r\n").getBytes(StandardCharsets.US_ASCII));
-            out.write("\r\n".getBytes(StandardCharsets.US_ASCII));
-            out.write((Integer.toHexString(cause.length()) + "\r\n").getBytes(StandardCharsets.US_ASCII));
-            out.write((cause + "\r\n").getBytes(StandardCharsets.US_ASCII));
-            finishResponse();
+            out.write("Connection: close\r\n".getBytes(StandardCharsets.UTF_8));
+            out.write(("Encapsulated: opt-body=0\r\n").getBytes(StandardCharsets.UTF_8));
+            out.write("\r\n".getBytes(StandardCharsets.UTF_8));
+            out.write((Integer.toHexString(cause.length()) + "\r\n").getBytes(StandardCharsets.UTF_8));
+            out.write((cause + "\r\n").getBytes(StandardCharsets.UTF_8));
+            writeFinalChunk();
         }
     }
 
@@ -526,28 +533,28 @@ public class ClientHandler implements Runnable {
 
         String date = new SimpleDateFormat("EEE, d MMM yyyy HH:mm:ss Z", Locale.US).format(new Date());
 
-        out.write(("ICAP/1.0 200 OK\r\n").getBytes(StandardCharsets.US_ASCII));
-        out.write(("Date: " + date + "\r\n").getBytes(StandardCharsets.US_ASCII));
-        out.write(SERVER_HEADER.getBytes(StandardCharsets.US_ASCII));
+        out.write(("ICAP/1.0 200 OK\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(("Date: " + date + "\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(SERVER_HEADER.getBytes(StandardCharsets.UTF_8));
 
         // TODO endpoints and method could be extensible
         if (service2.startsWith("info")) {
-            out.write(("Methods: " + RESPMOD + "\r\n").getBytes(StandardCharsets.US_ASCII));
+            out.write(("Methods: " + RESPMOD + "\r\n").getBytes(StandardCharsets.UTF_8));
         } else if (service2.startsWith("echo")) {
-            out.write(("Methods: " + REQMOD + ", " + RESPMOD + "\r\n").getBytes(StandardCharsets.US_ASCII));
+            out.write(("Methods: " + REQMOD + ", " + RESPMOD + "\r\n").getBytes(StandardCharsets.UTF_8));
         } else if (service2.startsWith("virus_scan")) {
-            out.write(("Methods: " + REQMOD + ", " + RESPMOD + "\r\n").getBytes(StandardCharsets.US_ASCII));
+            out.write(("Methods: " + REQMOD + ", " + RESPMOD + "\r\n").getBytes(StandardCharsets.UTF_8));
         }
 
         out.write(SERVICE_RESP_HEADER);
         // TODO ISTag is somewhat a session mechanism, not only a random string
-        out.write(("ISTag:\"" + Utils.INSTANCE.randomUUID32Chars() + "\"\r\n").getBytes(StandardCharsets.US_ASCII));
-        out.write(("Allow: 204\r\n").getBytes(StandardCharsets.US_ASCII));
+        out.write(("ISTag:\"" + Utils.INSTANCE.randomUUID32Chars() + "\"\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(("Allow: 204\r\n").getBytes(StandardCharsets.UTF_8));
         // TODO preview data should be supported in future
-        out.write(("Preview: 0\r\n").getBytes(StandardCharsets.US_ASCII));
-        out.write(("Transfer-Complete: *\r\n").getBytes(StandardCharsets.US_ASCII));
-        out.write(("Encapsulated: null-body=0\r\n").getBytes(StandardCharsets.US_ASCII));
-        out.write(("\r\n").getBytes(StandardCharsets.US_ASCII));
+        out.write(("Preview: 0\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(("Transfer-Complete: *\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(("Encapsulated: null-body=0\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(("\r\n").getBytes(StandardCharsets.UTF_8));
 
         methodInProgress = OPTIONS;
 
@@ -607,15 +614,15 @@ public class ClientHandler implements Runnable {
         // TODO endpoints should be extensible in future
 
         if (serviceInProgress.startsWith("echo") && httpRequestBody.size() == 0) {
-            out.write(("ICAP/1.0 204 No Content\r\n").getBytes(StandardCharsets.US_ASCII));
+            out.write(("ICAP/1.0 204 No Content\r\n").getBytes(StandardCharsets.UTF_8));
         } else {
-            out.write(("ICAP/1.0 200 OK\r\n").getBytes(StandardCharsets.US_ASCII));
+            out.write(("ICAP/1.0 200 OK\r\n").getBytes(StandardCharsets.UTF_8));
         }
 
-        out.write(("Date: " + date + "\r\n").getBytes(StandardCharsets.US_ASCII));
-        out.write(SERVER_HEADER.getBytes(StandardCharsets.US_ASCII));
-        out.write(("ISTag:\"" + Utils.INSTANCE.randomUUID32Chars() + "\"\r\n").getBytes(StandardCharsets.US_ASCII));
-        out.write(("Connection: close\r\n").getBytes(StandardCharsets.US_ASCII));
+        out.write(("Date: " + date + "\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(SERVER_HEADER.getBytes(StandardCharsets.UTF_8));
+        out.write(("ISTag:\"" + Utils.INSTANCE.randomUUID32Chars() + "\"\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(("Connection: close\r\n").getBytes(StandardCharsets.UTF_8));
 
         if (serviceInProgress.startsWith("echo")) {
             completeHandleEcho();
@@ -636,15 +643,15 @@ public class ClientHandler implements Runnable {
         // TODO endpoints should be extensible in future
 
         if (serviceInProgress.startsWith("echo") && httpResponseBody.size() == 0) {
-            out.write(("ICAP/1.0 204 No Content\r\n").getBytes(StandardCharsets.US_ASCII));
+            out.write(("ICAP/1.0 204 No Content\r\n").getBytes(StandardCharsets.UTF_8));
         } else {
-            out.write(("ICAP/1.0 200 OK\r\n").getBytes(StandardCharsets.US_ASCII));
+            out.write(("ICAP/1.0 200 OK\r\n").getBytes(StandardCharsets.UTF_8));
         }
 
-        out.write(("Date: " + date + "\r\n").getBytes(StandardCharsets.US_ASCII));
-        out.write(SERVER_HEADER.getBytes(StandardCharsets.US_ASCII));
-        out.write(("ISTag: \"" + Utils.INSTANCE.randomUUID32Chars() + "\"\r\n").getBytes(StandardCharsets.US_ASCII));
-        out.write(("Connection: close\r\n").getBytes(StandardCharsets.US_ASCII));
+        out.write(("Date: " + date + "\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(SERVER_HEADER.getBytes(StandardCharsets.UTF_8));
+        out.write(("ISTag: \"" + Utils.INSTANCE.randomUUID32Chars() + "\"\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(("Connection: close\r\n").getBytes(StandardCharsets.UTF_8));
 
         if (serviceInProgress.startsWith("info")) {
             completeHandleInfo(date);
@@ -688,12 +695,13 @@ public class ClientHandler implements Runnable {
         httpResponseHeader.append(VIA_HEADER);
         httpResponseHeader.append("\r\n");
 
-        out.write(("Encapsulated: res-hdr=0, res-body=" + httpResponseHeader.length() + "\r\n").getBytes(StandardCharsets.US_ASCII));
-        out.write("\r\n".getBytes(StandardCharsets.US_ASCII));
+        out.write(("Encapsulated: res-hdr=0, res-body=" + httpResponseHeader.length() + "\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write("\r\n".getBytes(StandardCharsets.UTF_8));
 
-        out.write(httpResponseHeader.toString().getBytes(StandardCharsets.US_ASCII));
-        out.write(chunkedBody.toString().getBytes(StandardCharsets.US_ASCII));
+        out.write(httpResponseHeader.toString().getBytes(StandardCharsets.UTF_8));
+        out.write(chunkedBody.toString().getBytes(StandardCharsets.UTF_8));
 
+        writeFinalChunk();
     }
 
     private void completeHandleEcho() throws Exception {
@@ -704,32 +712,40 @@ public class ClientHandler implements Runnable {
 
         if (httpRequestHeaders.size() > 0) {
             if (encapsulatedHeaderEcho.length() > 0) encapsulatedHeaderEcho.append(", ");
+
             encapsulatedHeaderEcho.append("req-hdr=").append(offset);
             offset += httpRequestHeaders.size();
         }
 
         ByteArrayOutputStream outHttpRequestBody = new ByteArrayOutputStream();
         if (httpRequestBody.size() > 0) {
-            outHttpRequestBody.write((Integer.toHexString(httpRequestBody.size()) + "\r\n").getBytes(StandardCharsets.US_ASCII));
+            // TODO because the http req body is read fully in mem, here write out the whole body as a big chunk
+            outHttpRequestBody.write((Integer.toHexString(httpRequestBody.size()) + "\r\n").getBytes(StandardCharsets.UTF_8));
             outHttpRequestBody.write(httpRequestBody.toByteArray());
-            outHttpRequestBody.write("\r\n".getBytes(StandardCharsets.US_ASCII));
+            outHttpRequestBody.write("\r\n".getBytes(StandardCharsets.UTF_8));
+
             if (encapsulatedHeaderEcho.length() > 0) encapsulatedHeaderEcho.append(", ");
+
             encapsulatedHeaderEcho.append("req-body=").append(offset);
             offset += outHttpRequestBody.size();
         }
 
         if (httpResponseHeaders.size() > 0) {
             if (encapsulatedHeaderEcho.length() > 0) encapsulatedHeaderEcho.append(", ");
+
             encapsulatedHeaderEcho.append("res-hdr=").append(offset);
             offset += httpResponseHeaders.size();
         }
 
         ByteArrayOutputStream outHttpResponseBody = new ByteArrayOutputStream();
         if (httpResponseBody.size() > 0) {
-            outHttpResponseBody.write((Integer.toHexString(httpResponseBody.size()) + "\r\n").getBytes(StandardCharsets.US_ASCII));
+            // TODO because the http resp body is read fully in mem, here write out the whole body as a big chunk
+            outHttpResponseBody.write((Integer.toHexString(httpResponseBody.size()) + "\r\n").getBytes(StandardCharsets.UTF_8));
             outHttpResponseBody.write(httpResponseBody.toByteArray());
-            outHttpResponseBody.write("\r\n".getBytes(StandardCharsets.US_ASCII));
+            outHttpResponseBody.write("\r\n".getBytes(StandardCharsets.UTF_8));
+
             if (encapsulatedHeaderEcho.length() > 0) encapsulatedHeaderEcho.append(", ");
+
             encapsulatedHeaderEcho.append("res-body=").append(offset);
             offset += outHttpResponseBody.size();
         }
@@ -739,9 +755,10 @@ public class ClientHandler implements Runnable {
             encapsulatedHeaderEcho.append("null-body=").append(offset);
         }
 
-        out.write(("Encapsulated: " + encapsulatedHeaderEcho + "\r\n").getBytes(StandardCharsets.US_ASCII));
-        out.write("\r\n".getBytes(StandardCharsets.US_ASCII));
+        out.write(("Encapsulated: " + encapsulatedHeaderEcho + "\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write("\r\n".getBytes(StandardCharsets.UTF_8));
 
+        // the writing orders here corresponding to the above 'Encapsulated' header construction order
         boolean eof = false;
         if (httpRequestHeaders.size() > 0) {
             eof = true;
@@ -764,7 +781,7 @@ public class ClientHandler implements Runnable {
         }
 
         if (eof) {
-            finishResponse();
+            writeFinalChunk();
         }
 
     }
@@ -781,12 +798,12 @@ public class ClientHandler implements Runnable {
         ByteArrayOutputStream outHttpResponseBody = new ByteArrayOutputStream();
 
         if (icapThreatsHeader.size() > 0) {
-            outHttpResponseHeaders.write("HTTP/1.1 403 Forbidden\r\n".getBytes(StandardCharsets.US_ASCII));
+            outHttpResponseHeaders.write("HTTP/1.1 403 Forbidden\r\n".getBytes(StandardCharsets.UTF_8));
         } else {
-            outHttpResponseHeaders.write("HTTP/1.1 200 OK\r\n".getBytes(StandardCharsets.US_ASCII));
+            outHttpResponseHeaders.write("HTTP/1.1 200 OK\r\n".getBytes(StandardCharsets.UTF_8));
         }
 
-        outHttpResponseHeaders.write(SERVER_HEADER.getBytes(StandardCharsets.US_ASCII));
+        outHttpResponseHeaders.write(SERVER_HEADER.getBytes(StandardCharsets.UTF_8));
 
         StringBuilder responseMessage = new StringBuilder("");
 
@@ -794,22 +811,22 @@ public class ClientHandler implements Runnable {
 
             responseMessage.append("Virus Found: ").append(threatName).append("\n");
 
-            outHttpResponseHeaders.write(("Content-Type: text/plain\r\n").getBytes(StandardCharsets.US_ASCII));
-            outHttpResponseHeaders.write(("Content-Length: " + responseMessage.length() + "\r\n").getBytes(StandardCharsets.US_ASCII));
+            outHttpResponseHeaders.write(("Content-Type: text/plain\r\n").getBytes(StandardCharsets.UTF_8));
+            outHttpResponseHeaders.write(("Content-Length: " + responseMessage.length() + "\r\n").getBytes(StandardCharsets.UTF_8));
 
-            outHttpResponseBody.write((Integer.toHexString(responseMessage.length()) + "\r\n").getBytes(StandardCharsets.US_ASCII));
-            outHttpResponseBody.write(responseMessage.toString().getBytes(StandardCharsets.US_ASCII));
-            outHttpResponseBody.write("\r\n".getBytes(StandardCharsets.US_ASCII));
+            outHttpResponseBody.write((Integer.toHexString(responseMessage.length()) + "\r\n").getBytes(StandardCharsets.UTF_8));
+            outHttpResponseBody.write(responseMessage.toString().getBytes(StandardCharsets.UTF_8));
+            outHttpResponseBody.write("\r\n".getBytes(StandardCharsets.UTF_8));
 
         }
 
-        outHttpResponseHeaders.write(VIA_HEADER.getBytes(StandardCharsets.US_ASCII));
+        outHttpResponseHeaders.write(VIA_HEADER.getBytes(StandardCharsets.UTF_8));
 
         if (icapThreatsHeader.size() > 0) {
             outHttpResponseHeaders.write(icapThreatsHeader.toByteArray());
         }
 
-        outHttpResponseHeaders.write("\r\n".getBytes(StandardCharsets.US_ASCII));
+        outHttpResponseHeaders.write("\r\n".getBytes(StandardCharsets.UTF_8));
 
         if (outHttpRequestHeaders.size() > 0) {
             if (encapsulatedHeaderEcho.length() > 0) encapsulatedHeaderEcho.append(", ");
@@ -840,8 +857,8 @@ public class ClientHandler implements Runnable {
             encapsulatedHeaderEcho.append("null-body=").append(offset);
         }
 
-        out.write(("Encapsulated: " + encapsulatedHeaderEcho + "\r\n").getBytes(StandardCharsets.US_ASCII));
-        out.write("\r\n".getBytes(StandardCharsets.US_ASCII));
+        out.write(("Encapsulated: " + encapsulatedHeaderEcho + "\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write("\r\n".getBytes(StandardCharsets.UTF_8));
 
         boolean eof = false;
         if (outHttpRequestHeaders.size() > 0) {
@@ -865,7 +882,7 @@ public class ClientHandler implements Runnable {
         }
 
         if (eof) {
-            finishResponse();
+            writeFinalChunk();
         }
 
     }
@@ -901,9 +918,9 @@ public class ClientHandler implements Runnable {
 
         for (String threat : response.getThreatList()) {
             threatName = threat;
-            icapThreatsHeader.write(("X-Threat-Description: " + threatName + "\r\n").getBytes(StandardCharsets.US_ASCII));
-            icapThreatsHeader.write(("X-Threat-Resolution: None\r\n").getBytes(StandardCharsets.US_ASCII));
-            icapThreatsHeader.write(("X-Threat-Type: Threat\r\n").getBytes(StandardCharsets.US_ASCII));
+            icapThreatsHeader.write(("X-Threat-Description: " + threatName + "\r\n").getBytes(StandardCharsets.UTF_8));
+            icapThreatsHeader.write(("X-Threat-Resolution: None\r\n").getBytes(StandardCharsets.UTF_8));
+            icapThreatsHeader.write(("X-Threat-Type: Threat\r\n").getBytes(StandardCharsets.UTF_8));
             break;
         }
 
@@ -923,9 +940,9 @@ public class ClientHandler implements Runnable {
 
         if (response.getThreat() != null) {
             threatName = response.getThreat();
-            icapThreatsHeader.write(("X-Threat-Description: " + threatName + "\r\n").getBytes(StandardCharsets.US_ASCII));
-            icapThreatsHeader.write(("X-Threat-Resolution: None\r\n").getBytes(StandardCharsets.US_ASCII));
-            icapThreatsHeader.write(("X-Threat-Type: Threat\r\n").getBytes(StandardCharsets.US_ASCII));
+            icapThreatsHeader.write(("X-Threat-Description: " + threatName + "\r\n").getBytes(StandardCharsets.UTF_8));
+            icapThreatsHeader.write(("X-Threat-Resolution: None\r\n").getBytes(StandardCharsets.UTF_8));
+            icapThreatsHeader.write(("X-Threat-Type: Threat\r\n").getBytes(StandardCharsets.UTF_8));
         }
 
     }
@@ -937,7 +954,7 @@ public class ClientHandler implements Runnable {
     }
 
     public static void main(String[] args) throws Exception {
-        Worker.main(args);
+        Server.main(args);
     }
 
 }

@@ -17,9 +17,9 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
-public class Worker {
+public class Server {
 
-    private static final Logger logger = LoggerFactory.getLogger(Worker.class);
+    private static final Logger logger = LoggerFactory.getLogger(Server.class);
     private static final AtomicLong seq = new AtomicLong();
 
     private static final ExecutorService reqHandlePool = new ThreadPoolExecutor(1, Constants.INSTANCE.getWORKER_POOL_SIZE(),
@@ -28,7 +28,7 @@ public class Worker {
             r -> new Thread(r, "icap-server-worker-thread-" + seq.getAndIncrement()));
 
     public static void main(String[] args) {
-        new Worker().start();
+        new Server().start();
     }
 
     private ServerSocket serverSocket;
