@@ -180,7 +180,7 @@ public class TestCase {
             System.out.print(response);
         }
 
-        Assertions.assertTrue(response.toString().startsWith("ICAP/1.0 200 "), () -> "Expected status of 200");
+        Assertions.assertTrue(response.toString().startsWith("ICAP/1.0 204 "), () -> "Expected status of 204");
     }
 
 //    @Test

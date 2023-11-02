@@ -49,6 +49,6 @@ internal object Utils {
         return if (ip == "255.255.255.255") true else false
     }
 
-    fun randomUUID32Chars() = UUID.randomUUID().toString().replace("-", "")
+    fun randomUUID32Chars() = UUID.randomUUID().toString().replace("-", "").uppercase()
 
 }

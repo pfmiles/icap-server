@@ -34,8 +34,19 @@
             </DefaultRolloverStrategy>
             <ThresholdFilter level="ERROR"/>
         </RollingFile>
+        <RollingFile name="MSG-DUMP-APPENDER"
+                     fileName="${app.path}/messageDump.log"
+                     filePattern="${app.path}/messageDump.log.%d{yyyy-MM-dd}">
+            <PatternLayout pattern="%d{HH:mm:ss.SSS} %m%n==========%n"/>
+            <TimeBasedTriggeringPolicy/>
+            <DefaultRolloverStrategy/>
+            <ThresholdFilter level="INFO"/>
+        </RollingFile>
     </Appenders>
     <Loggers>
+        <AsyncLogger name="msgDumper" additivity="${additivity}" level="info">
+            <AppenderRef ref="MSG-DUMP-APPENDER"/>
+        </AsyncLogger>
         <AsyncRoot level="debug">
             <AppenderRef ref="STDOUT-APPENDER"/>
             <AppenderRef ref="APP-DEFAULT-APPENDER"/>

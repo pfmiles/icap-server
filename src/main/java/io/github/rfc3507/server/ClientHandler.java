@@ -1,8 +1,8 @@
 package io.github.rfc3507.server;
 
-import com.github.pfmiles.icapserver.impl.ClientCapabilities;
 import com.github.pfmiles.icapserver.impl.Constants;
 import com.github.pfmiles.icapserver.impl.Utils;
+import com.github.pfmiles.icapserver.impl.protocol.ClientCapabilities;
 import io.github.rfc3507.av.clamav.ClamAVCore;
 import io.github.rfc3507.av.clamav.ClamAVResponse;
 import io.github.rfc3507.av.windowsdefender.WindowsDefenderAntivirus;
@@ -22,12 +22,14 @@ import java.util.Arrays;
 import java.util.Date;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.TimeZone;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class ClientHandler implements Runnable {
 
     private static final Logger logger = LoggerFactory.getLogger(ClientHandler.class);
+    private static final Logger msgDumper = LoggerFactory.getLogger("msgDumper");
 
     private static final String serverName = Utils.INSTANCE.optsInOrDefault(Constants.SVR_NAME_ENV_VAR, Constants.SVR_NAME_PROPS_VAR, Constants.DFT_SVC_VAL);
     private static final byte[] SERVICE_RESP_HEADER = ("Service: " + serverName + "\r\n").getBytes(StandardCharsets.UTF_8);
@@ -70,6 +72,7 @@ public class ClientHandler implements Runnable {
     public void run() {
         try {
             in = socket.getInputStream();
+//            out = new TeeOutputStream(socket.getOutputStream());
             out = socket.getOutputStream();
             handle();
             logger.info("Client request completed.");
@@ -84,31 +87,31 @@ public class ClientHandler implements Runnable {
 
     private void handle() throws IOException {
 
-        while (true) { // label: handleStart
+//        while (true) { // label: handleStart
 
-            httpRequestHeaders = new ByteArrayOutputStream();
-            httpRequestBody = new ByteArrayOutputStream();
-            httpResponseHeaders = new ByteArrayOutputStream();
-            httpResponseBody = new ByteArrayOutputStream();
+        httpRequestHeaders = new ByteArrayOutputStream();
+        httpRequestBody = new ByteArrayOutputStream();
+        httpResponseHeaders = new ByteArrayOutputStream();
+        httpResponseBody = new ByteArrayOutputStream();
 
-            methodInProgress = null;
+        methodInProgress = null;
 
-            try {
-                handleIcapRequestHeaders();
-                if (methodInProgress != null) {
-                    handleEncapsulatedMessage();
-                }
-                out.flush();
-            } catch (Exception e) {
-                logger.error("Error when processing icap request, process for this request terminated.", e);
-                sendServerError(e.getMessage());
+        try {
+            handleIcapRequestHeaders();
+            if (methodInProgress != null) {
+                handleEncapsulatedMessage();
             }
-
-            if (OPTIONS.equals(methodInProgress)) { // TODO what if 'too many OPTIONS' attack?
-                continue; // goto: handleStart
-            }
-            break;
+            out.flush();
+        } catch (Exception e) {
+            logger.error("Error when processing icap request, process for this request terminated.", e);
+            sendServerError(e.getMessage());
         }
+
+//            if (OPTIONS.equals(methodInProgress)) { // TODO what if 'too many OPTIONS' attack?
+//                continue; // goto: handleStart
+//            }
+//            break;
+//        }
 
     }
 
@@ -166,32 +169,34 @@ public class ClientHandler implements Runnable {
 
         int lastOffsetValue = 0;
 
-        String[] encapsulatedValues = encapsulatedHeader.split(",");
+        if (encapsulatedHeader != null) {
+            String[] encapsulatedValues = encapsulatedHeader.split(",");
 
-        // compute encapsulated http headers' size in 'Encapsulated' header value, for example: 'req-hdr=0, res-hdr=822, res-body=1655'
-        for (String offset : encapsulatedValues) {
+            // compute encapsulated http headers' size in 'Encapsulated' header value, for example: 'req-hdr=0, res-hdr=822, res-body=1655'
+            for (String offset : encapsulatedValues) {
 
-            String[] offsetParser = offset.split("=");
+                String[] offsetParser = offset.split("=");
 
-            String offsetLabel = offsetParser[0].trim();
+                String offsetLabel = offsetParser[0].trim();
 
-            int offsetValue = Integer.parseInt(offsetParser[1].trim());
+                int offsetValue = Integer.parseInt(offsetParser[1].trim());
 
-            switch (lastOffsetLabel) {
+                switch (lastOffsetLabel) {
 
-                case "req-hdr":
-                    httpRequestHeaderSize = (offsetValue - lastOffsetValue);
-                    break;
+                    case "req-hdr":
+                        httpRequestHeaderSize = (offsetValue - lastOffsetValue);
+                        break;
 
-                case "res-hdr":
-                    httpResponseHeaderSize = (offsetValue - lastOffsetValue);
-                    break;
+                    case "res-hdr":
+                        httpResponseHeaderSize = (offsetValue - lastOffsetValue);
+                        break;
+
+                }
+
+                lastOffsetLabel = offsetLabel;
+                lastOffsetValue = offsetValue;
 
             }
-
-            lastOffsetLabel = offsetLabel;
-            lastOffsetValue = offsetValue;
-
         }
 
         byte[] parseContent;
@@ -386,7 +391,7 @@ public class ClientHandler implements Runnable {
         String[] methodContent = methodLine.split("\\s");
 
         if (methodContent.length != 3) {
-            sendBadRequest("Invalid ICAP Method Sintax");
+            sendBadRequest("Invalid ICAP Method Syntax");
             return;
         }
 
@@ -412,8 +417,9 @@ public class ClientHandler implements Runnable {
             }
         }
 
-        if (encapsulatedHeader == null) {
-            sendBadRequest("Invalid ICAP Requirements: <Encapsulated> Header not found");
+        // only OPTIONS method can without Encapsulated header
+        if (encapsulatedHeader == null && !methodLineUpper.startsWith(OPTIONS)) {
+            sendBadRequest("Invalid ICAP Requirements: <Encapsulated> Header not found and is not OPTIONS request.");
             return;
         }
 
@@ -531,10 +537,8 @@ public class ClientHandler implements Runnable {
 
         }
 
-        String date = new SimpleDateFormat("EEE, d MMM yyyy HH:mm:ss Z", Locale.US).format(new Date());
-
         out.write(("ICAP/1.0 200 OK\r\n").getBytes(StandardCharsets.UTF_8));
-        out.write(("Date: " + date + "\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(("Date: " + dateHeaderVal() + "\r\n").getBytes(StandardCharsets.UTF_8));
         out.write(SERVER_HEADER.getBytes(StandardCharsets.UTF_8));
 
         // TODO endpoints and method could be extensible
@@ -548,16 +552,24 @@ public class ClientHandler implements Runnable {
 
         out.write(SERVICE_RESP_HEADER);
         // TODO ISTag is somewhat a session mechanism, not only a random string
-        out.write(("ISTag:\"" + Utils.INSTANCE.randomUUID32Chars() + "\"\r\n").getBytes(StandardCharsets.UTF_8));
-        out.write(("Allow: 204\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(("ISTag: \"" + Utils.INSTANCE.randomUUID32Chars() + "\"\r\n").getBytes(StandardCharsets.UTF_8));
+//        out.write(("Allow: 204\r\n").getBytes(StandardCharsets.UTF_8));
         // TODO preview data should be supported in future
         out.write(("Preview: 0\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(("Max-Connections: 1024\r\n").getBytes(StandardCharsets.UTF_8));
         out.write(("Transfer-Complete: *\r\n").getBytes(StandardCharsets.UTF_8));
         out.write(("Encapsulated: null-body=0\r\n").getBytes(StandardCharsets.UTF_8));
         out.write(("\r\n").getBytes(StandardCharsets.UTF_8));
 
         methodInProgress = OPTIONS;
 
+    }
+
+    // generate http-compatible date header value for now
+    private String dateHeaderVal() {
+        SimpleDateFormat df = new SimpleDateFormat("EEE, d MMM yyyy HH:mm:ss z", Locale.US);
+        df.setTimeZone(TimeZone.getTimeZone("GMT"));
+        return df.format(new Date());
     }
 
     private void prepareHandleRequestModification(
@@ -609,19 +621,16 @@ public class ClientHandler implements Runnable {
             findThreatsInPayload();
         }
 
-        String date = new SimpleDateFormat("EEE, d MMM yyyy HH:mm:ss Z", Locale.US).format(new Date());
-
         // TODO endpoints should be extensible in future
+//        if (serviceInProgress.startsWith("echo") && httpRequestBody.size() == 0) {
+//            out.write(("ICAP/1.0 204 No Content\r\n").getBytes(StandardCharsets.UTF_8));
+//        } else {
+        out.write(("ICAP/1.0 200 OK\r\n").getBytes(StandardCharsets.UTF_8));
+//        }
 
-        if (serviceInProgress.startsWith("echo") && httpRequestBody.size() == 0) {
-            out.write(("ICAP/1.0 204 No Content\r\n").getBytes(StandardCharsets.UTF_8));
-        } else {
-            out.write(("ICAP/1.0 200 OK\r\n").getBytes(StandardCharsets.UTF_8));
-        }
-
-        out.write(("Date: " + date + "\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(("Date: " + dateHeaderVal() + "\r\n").getBytes(StandardCharsets.UTF_8));
         out.write(SERVER_HEADER.getBytes(StandardCharsets.UTF_8));
-        out.write(("ISTag:\"" + Utils.INSTANCE.randomUUID32Chars() + "\"\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(("ISTag: \"" + Utils.INSTANCE.randomUUID32Chars() + "\"\r\n").getBytes(StandardCharsets.UTF_8));
         out.write(("Connection: close\r\n").getBytes(StandardCharsets.UTF_8));
 
         if (serviceInProgress.startsWith("echo")) {
@@ -638,23 +647,20 @@ public class ClientHandler implements Runnable {
             findThreatsInPayload();
         }
 
-        String date = new SimpleDateFormat("EEE, d MMM yyyy HH:mm:ss Z", Locale.US).format(new Date());
-
         // TODO endpoints should be extensible in future
+//        if (serviceInProgress.startsWith("echo") && httpResponseBody.size() == 0) {
+//            out.write(("ICAP/1.0 204 No Content\r\n").getBytes(StandardCharsets.UTF_8));
+//        } else {
+        out.write(("ICAP/1.0 200 OK\r\n").getBytes(StandardCharsets.UTF_8));
+//        }
 
-        if (serviceInProgress.startsWith("echo") && httpResponseBody.size() == 0) {
-            out.write(("ICAP/1.0 204 No Content\r\n").getBytes(StandardCharsets.UTF_8));
-        } else {
-            out.write(("ICAP/1.0 200 OK\r\n").getBytes(StandardCharsets.UTF_8));
-        }
-
-        out.write(("Date: " + date + "\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(("Date: " + dateHeaderVal() + "\r\n").getBytes(StandardCharsets.UTF_8));
         out.write(SERVER_HEADER.getBytes(StandardCharsets.UTF_8));
         out.write(("ISTag: \"" + Utils.INSTANCE.randomUUID32Chars() + "\"\r\n").getBytes(StandardCharsets.UTF_8));
         out.write(("Connection: close\r\n").getBytes(StandardCharsets.UTF_8));
 
         if (serviceInProgress.startsWith("info")) {
-            completeHandleInfo(date);
+            completeHandleInfo(dateHeaderVal());
         } else if (serviceInProgress.startsWith("echo")) {
             completeHandleEcho();
         } else if (serviceInProgress.startsWith("virus_scan")) {
@@ -710,6 +716,9 @@ public class ClientHandler implements Runnable {
 
         int offset = 0;
 
+        // request or response traffic dump
+        StringBuilder dump = new StringBuilder();
+
         if (httpRequestHeaders.size() > 0) {
             if (encapsulatedHeaderEcho.length() > 0) encapsulatedHeaderEcho.append(", ");
 
@@ -750,37 +759,50 @@ public class ClientHandler implements Runnable {
             offset += outHttpResponseBody.size();
         }
 
-        if (httpRequestBody.size() == 0 && httpResponseBody.size() == 0) {
+        boolean nobody = httpRequestBody.size() == 0 && httpResponseBody.size() == 0;
+        if (nobody) {
             if (encapsulatedHeaderEcho.length() > 0) encapsulatedHeaderEcho.append(", ");
             encapsulatedHeaderEcho.append("null-body=").append(offset);
+        }
+
+        // dump the message
+        if (REQMOD.equals(methodInProgress)) {
+            // dump req
+            if (httpRequestHeaders.size() > 0)
+                dump.append(httpRequestHeaders.toString(StandardCharsets.UTF_8.name()));
+            if (httpRequestBody.size() > 0)
+                dump.append(httpRequestBody.toString(StandardCharsets.UTF_8.name()));
+            msgDumper.info("request:\n" + dump);
+        } else if (RESPMOD.equals(methodInProgress)) {
+            // dump resp
+            if (httpResponseHeaders.size() > 0)
+                dump.append(httpResponseHeaders.toString(StandardCharsets.UTF_8.name()));
+            if (httpResponseBody.size() > 0)
+                dump.append(httpResponseBody.toString(StandardCharsets.UTF_8.name()));
+            msgDumper.info("response:\n" + dump);
         }
 
         out.write(("Encapsulated: " + encapsulatedHeaderEcho + "\r\n").getBytes(StandardCharsets.UTF_8));
         out.write("\r\n".getBytes(StandardCharsets.UTF_8));
 
         // the writing orders here corresponding to the above 'Encapsulated' header construction order
-        boolean eof = false;
         if (httpRequestHeaders.size() > 0) {
-            eof = true;
             out.write(httpRequestHeaders.toByteArray());
         }
 
         if (outHttpRequestBody.size() > 0) {
-            eof = true;
             out.write(outHttpRequestBody.toByteArray());
         }
 
         if (httpResponseHeaders.size() > 0) {
-            eof = true;
             out.write(httpResponseHeaders.toByteArray());
         }
 
         if (outHttpResponseBody.size() > 0) {
-            eof = true;
             out.write(outHttpResponseBody.toByteArray());
         }
 
-        if (eof) {
+        if (!nobody) {
             writeFinalChunk();
         }
 
