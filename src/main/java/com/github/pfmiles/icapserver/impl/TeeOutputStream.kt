@@ -8,7 +8,7 @@ import java.nio.charset.StandardCharsets
 /**
  * just for test, print out what have been written.
  */
-class TeeOutputStream(val dest: OutputStream) : OutputStream() {
+internal class TeeOutputStream(val dest: OutputStream) : OutputStream() {
     companion object {
         private val logger = LoggerFactory.getLogger(TeeOutputStream::class.java)
     }

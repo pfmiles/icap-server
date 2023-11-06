@@ -1,5 +1,8 @@
 package com.github.pfmiles.icapserver.impl
 
+import com.github.pfmiles.icapserver.impl.protocol.Chunk
+import java.nio.charset.StandardCharsets
+
 /**
  * Constants
  *
@@ -56,10 +59,12 @@ internal object Constants {
     /**
      * the last chunk of http 1.1 chunked encoding, also used in icap protocol encapsulated http message body transfer
      */
-    const val CHUNK_END = "0\r\n\r\n"
+    val FINAL_CHUNK_STR = Chunk.FINAL_CHUNK.toByteArray().toString(StandardCharsets.US_ASCII)
 
     /**
      * icap's http chunk-extension to indicate a data transmission termination during a process of preview
      */
-    const val ICAP_PREV_TERMINATE = "0; ieof\r\n\r\n"
+    val IEOF_CHUNK_STR = Chunk.IEOF_CHUNK.toByteArray().toString(StandardCharsets.US_ASCII)
+
+    const val CRLF = "\r\n"
 }

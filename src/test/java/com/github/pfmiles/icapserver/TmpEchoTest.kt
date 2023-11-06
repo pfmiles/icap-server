@@ -57,7 +57,7 @@ class TmpEchoTest {
                                
                            """.trimIndent().replace("\n", "\r\n") + reqHeaders
         logger.info(noBodyReqMod)
-        logger.info(client.send(noBodyReqMod))
+        logger.info(client.send(noBodyReqMod).replace("\r", "\\r").replace("\n", "\\n\n"))
     }
 
     @Test
@@ -72,7 +72,7 @@ class TmpEchoTest {
                                 
                             """.trimIndent().replace("\n", "\r\n") + reqHeaders
         logger.info(noBodyRespMod)
-        logger.info(client.send(noBodyRespMod))
+        logger.info(client.send(noBodyRespMod).replace("\r", "\\r").replace("\n", "\\n\n"))
     }
 
     @Test
@@ -91,17 +91,35 @@ class TmpEchoTest {
                                 
                             """.trimIndent().replace("\n", "\r\n")
         logger.info(hasBodyReqMod)
-        logger.info(client.send(hasBodyReqMod))
+        logger.info(client.send(hasBodyReqMod).replace("\r", "\\r").replace("\n", "\\n\n"))
     }
 
     @Test
     fun testHasBodyRespMod() {
         val hasBodyRespMod = """
-                                 RESPMOD icap://127.0.0.1/echo ICAP/1.0
-                                 Host: localhost
-                                 User-Agent: Icap-Client/1.0
-                                 Allow: 204
-                                 Encapsulated: req-hdr=0, req-body=0
+                                 RESPMOD icap://127.0.0.1:1344/echo ICAP/1.0
+                                 Host: 127.0.0.1:1344
+                                 Date: Sun, 05 Nov 2023 15:22:07 GMT
+                                 Connection: close
+                                 Encapsulated: req-hdr=0, res-hdr=98, res-body=474
+                                 Allow: 204, trailers
+                                 
+                                 GET https://www.baidu.com/ HTTP/1.1
+                                 Host: www.baidu.com
+                                 User-Agent: curl/7.74.0
+                                 Accept: */*
+                                 
+                                 HTTP/1.1 200 OK
+                                 Accept-Ranges: bytes
+                                 Cache-Control: private, no-cache, no-store, proxy-revalidate, no-transform
+                                 Content-Length: 2443
+                                 Content-Type: text/html
+                                 Date: Sun, 05 Nov 2023 15:22:07 GMT
+                                 ETag: "588603e2-98b"
+                                 Last-Modified: Mon, 23 Jan 2017 13:23:46 GMT
+                                 Pragma: no-cache
+                                 Server: bfe/1.0.8.18
+                                 Set-Cookie: BDORZ=27315; max-age=86400; domain=.baidu.com; path=/
                                  
                                  ${Integer.toHexString(data.length)}
                                  $data
@@ -109,8 +127,8 @@ class TmpEchoTest {
                                  
                                  
                              """.trimIndent().replace("\n", "\r\n")
-        logger.info(hasBodyRespMod)
-        logger.info(client.send(hasBodyRespMod))
+        logger.info(hasBodyRespMod.replace("\r", "\\r").replace("\n", "\\n\n"))
+        logger.info(client.send(hasBodyRespMod).replace("\r", "\\r").replace("\n", "\\n\n"))
     }
 
     @Test
@@ -129,7 +147,7 @@ class TmpEchoTest {
                                     
                                 """.trimIndent().replace("\n", "\r\n")
         logger.info(hasBodyReqModIeof)
-        logger.info(client.send(hasBodyReqModIeof))
+        logger.info(client.send(hasBodyReqModIeof).replace("\r", "\\r").replace("\n", "\\n\n"))
     }
 
     @Test
@@ -139,7 +157,7 @@ class TmpEchoTest {
                                      Host: localhost
                                      User-Agent: Icap-Client/1.0
                                      Allow: 204
-                                     Encapsulated: req-hdr=0, req-body=0
+                                     Encapsulated: req-hdr=0, res-body=0
                                      
                                      ${Integer.toHexString(data.length)}
                                      $data
@@ -148,7 +166,7 @@ class TmpEchoTest {
                                      
                                  """.trimIndent().replace("\n", "\r\n")
         logger.info(hasBodyRespModIeof)
-        logger.info(client.send(hasBodyRespModIeof))
+        logger.info(client.send(hasBodyRespModIeof).replace("\r", "\\r").replace("\n", "\\n\n"))
     }
 
     @Test
@@ -168,7 +186,7 @@ class TmpEchoTest {
                                 
                             """.trimIndent().replace("\n", "\r\n")
         logger.info(connectReqMod)
-        logger.info(client.send(connectReqMod))
+        logger.info(client.send(connectReqMod).replace("\r", "\\r").replace("\n", "\\n\n"))
     }
 
     @Test

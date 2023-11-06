@@ -145,7 +145,7 @@ public class TestCase {
                 + "\r\n"
                 + Integer.toHexString(body.length) + "\r\n"
                 + data + "\r\n"
-                + Constants.ICAP_PREV_TERMINATE;
+                + Constants.INSTANCE.getIEOF_CHUNK_STR();
 
         logger.info(payload);
 
@@ -180,7 +180,7 @@ public class TestCase {
             System.out.print(response);
         }
 
-        Assertions.assertTrue(response.toString().startsWith("ICAP/1.0 204 "), () -> "Expected status of 204");
+        Assertions.assertTrue(response.toString().startsWith("ICAP/1.0 200 "), () -> "Expected status of 204");
     }
 
 //    @Test

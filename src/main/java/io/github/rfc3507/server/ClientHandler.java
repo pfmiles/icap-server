@@ -2,7 +2,7 @@ package io.github.rfc3507.server;
 
 import com.github.pfmiles.icapserver.impl.Constants;
 import com.github.pfmiles.icapserver.impl.Utils;
-import com.github.pfmiles.icapserver.impl.protocol.ClientCapabilities;
+import com.github.pfmiles.icapserver.impl.protocol.Chunk;
 import io.github.rfc3507.av.clamav.ClamAVCore;
 import io.github.rfc3507.av.clamav.ClamAVResponse;
 import io.github.rfc3507.av.windowsdefender.WindowsDefenderAntivirus;
@@ -11,6 +11,7 @@ import org.apache.commons.io.IOUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -19,7 +20,9 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.Date;
+import java.util.Iterator;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.TimeZone;
@@ -61,8 +64,6 @@ public class ClientHandler implements Runnable {
     private ByteArrayOutputStream httpResponseHeaders = null;
     // TODO http resp body is fully read in mem, should be streaming processed
     private ByteArrayOutputStream httpResponseBody = null;
-
-    private ClientCapabilities clientCaps;
 
     public ClientHandler(Socket c) {
         this.socket = c;
@@ -302,7 +303,7 @@ public class ClientHandler implements Runnable {
             // when a CRLF encountered
             if (mark[0] == '\r' && mark[1] == '\n') {
 
-                if (control.toString().equals(Constants.ICAP_PREV_TERMINATE)) {
+                if (control.toString().equals(Constants.INSTANCE.getIEOF_CHUNK_STR())) {
                     return true;
                 }
 
@@ -343,7 +344,7 @@ public class ClientHandler implements Runnable {
                     control.append((char) lf);
                 }
 
-                if (control.toString().equals(Constants.CHUNK_END)) {
+                if (control.toString().equals(Constants.INSTANCE.getFINAL_CHUNK_STR())) {
                     return false;
                 }
 
@@ -450,7 +451,7 @@ public class ClientHandler implements Runnable {
     }
 
     private void writeFinalChunk() throws IOException {
-        out.write(Constants.CHUNK_END.getBytes(StandardCharsets.UTF_8));
+        out.write(Chunk.Companion.getFINAL_CHUNK().toByteArray());
     }
 
     private void sendCloseConnection() throws IOException {
@@ -719,7 +720,8 @@ public class ClientHandler implements Runnable {
         // request or response traffic dump
         StringBuilder dump = new StringBuilder();
 
-        if (httpRequestHeaders.size() > 0) {
+        // respond with http request headers only when REQMOD
+        if (httpRequestHeaders.size() > 0 && REQMOD.equals(methodInProgress)) {
             if (encapsulatedHeaderEcho.length() > 0) encapsulatedHeaderEcho.append(", ");
 
             encapsulatedHeaderEcho.append("req-hdr=").append(offset);
@@ -727,11 +729,11 @@ public class ClientHandler implements Runnable {
         }
 
         ByteArrayOutputStream outHttpRequestBody = new ByteArrayOutputStream();
-        if (httpRequestBody.size() > 0) {
-            // TODO because the http req body is read fully in mem, here write out the whole body as a big chunk
-            outHttpRequestBody.write((Integer.toHexString(httpRequestBody.size()) + "\r\n").getBytes(StandardCharsets.UTF_8));
-            outHttpRequestBody.write(httpRequestBody.toByteArray());
-            outHttpRequestBody.write("\r\n".getBytes(StandardCharsets.UTF_8));
+        if (httpRequestBody.size() > 0 && REQMOD.equals(methodInProgress)) {
+            Iterator<Chunk> reqBodyChunks = Utils.INSTANCE.chunkenize(new ByteArrayInputStream(httpRequestBody.toByteArray()), 4096);
+            while (reqBodyChunks.hasNext()) {
+                outHttpRequestBody.write(reqBodyChunks.next().toByteArray());
+            }
 
             if (encapsulatedHeaderEcho.length() > 0) encapsulatedHeaderEcho.append(", ");
 
@@ -739,7 +741,7 @@ public class ClientHandler implements Runnable {
             offset += outHttpRequestBody.size();
         }
 
-        if (httpResponseHeaders.size() > 0) {
+        if (httpResponseHeaders.size() > 0 && RESPMOD.equals(methodInProgress)) {
             if (encapsulatedHeaderEcho.length() > 0) encapsulatedHeaderEcho.append(", ");
 
             encapsulatedHeaderEcho.append("res-hdr=").append(offset);
@@ -747,11 +749,11 @@ public class ClientHandler implements Runnable {
         }
 
         ByteArrayOutputStream outHttpResponseBody = new ByteArrayOutputStream();
-        if (httpResponseBody.size() > 0) {
-            // TODO because the http resp body is read fully in mem, here write out the whole body as a big chunk
-            outHttpResponseBody.write((Integer.toHexString(httpResponseBody.size()) + "\r\n").getBytes(StandardCharsets.UTF_8));
-            outHttpResponseBody.write(httpResponseBody.toByteArray());
-            outHttpResponseBody.write("\r\n".getBytes(StandardCharsets.UTF_8));
+        if (httpResponseBody.size() > 0 && RESPMOD.equals(methodInProgress)) {
+            Iterator<Chunk> respBodyChunks = Utils.INSTANCE.chunkenize(new ByteArrayInputStream(httpResponseBody.toByteArray()), 4096);
+            while (respBodyChunks.hasNext()) {
+                outHttpResponseBody.write(respBodyChunks.next().toByteArray());
+            }
 
             if (encapsulatedHeaderEcho.length() > 0) encapsulatedHeaderEcho.append(", ");
 
@@ -759,8 +761,7 @@ public class ClientHandler implements Runnable {
             offset += outHttpResponseBody.size();
         }
 
-        boolean nobody = httpRequestBody.size() == 0 && httpResponseBody.size() == 0;
-        if (nobody) {
+        if (httpRequestBody.size() == 0 && httpResponseBody.size() == 0) {
             if (encapsulatedHeaderEcho.length() > 0) encapsulatedHeaderEcho.append(", ");
             encapsulatedHeaderEcho.append("null-body=").append(offset);
         }
@@ -768,17 +769,23 @@ public class ClientHandler implements Runnable {
         // dump the message
         if (REQMOD.equals(methodInProgress)) {
             // dump req
-            if (httpRequestHeaders.size() > 0)
-                dump.append(httpRequestHeaders.toString(StandardCharsets.UTF_8.name()));
+            String reqHeadersStr = null;
+            if (httpRequestHeaders.size() > 0) {
+                reqHeadersStr = httpRequestHeaders.toString(StandardCharsets.UTF_8.name());
+                dump.append(reqHeadersStr);
+            }
             if (httpRequestBody.size() > 0)
-                dump.append(httpRequestBody.toString(StandardCharsets.UTF_8.name()));
+                dump.append(bodyToStr(reqHeadersStr, httpRequestBody));
             msgDumper.info("request:\n" + dump);
         } else if (RESPMOD.equals(methodInProgress)) {
             // dump resp
-            if (httpResponseHeaders.size() > 0)
-                dump.append(httpResponseHeaders.toString(StandardCharsets.UTF_8.name()));
+            String respHeadersStr = null;
+            if (httpResponseHeaders.size() > 0) {
+                respHeadersStr = httpResponseHeaders.toString(StandardCharsets.UTF_8.name());
+                dump.append(respHeadersStr);
+            }
             if (httpResponseBody.size() > 0)
-                dump.append(httpResponseBody.toString(StandardCharsets.UTF_8.name()));
+                dump.append(bodyToStr(respHeadersStr, httpResponseBody));
             msgDumper.info("response:\n" + dump);
         }
 
@@ -786,26 +793,51 @@ public class ClientHandler implements Runnable {
         out.write("\r\n".getBytes(StandardCharsets.UTF_8));
 
         // the writing orders here corresponding to the above 'Encapsulated' header construction order
-        if (httpRequestHeaders.size() > 0) {
-            out.write(httpRequestHeaders.toByteArray());
+        if (REQMOD.equals(methodInProgress)) {
+            if (httpRequestHeaders.size() > 0) {
+                out.write(httpRequestHeaders.toByteArray());
+            }
+
+            if (outHttpRequestBody.size() > 0) {
+                out.write(outHttpRequestBody.toByteArray());
+            }
         }
 
-        if (outHttpRequestBody.size() > 0) {
-            out.write(outHttpRequestBody.toByteArray());
+        if (RESPMOD.equals(methodInProgress)) {
+            if (httpResponseHeaders.size() > 0) {
+                out.write(httpResponseHeaders.toByteArray());
+            }
+
+            if (outHttpResponseBody.size() > 0) {
+                out.write(outHttpResponseBody.toByteArray());
+            }
         }
 
-        if (httpResponseHeaders.size() > 0) {
-            out.write(httpResponseHeaders.toByteArray());
-        }
+    }
 
-        if (outHttpResponseBody.size() > 0) {
-            out.write(outHttpResponseBody.toByteArray());
+    private String bodyToStr(String headersStr, ByteArrayOutputStream bodyStream) {
+        // body to text when it's a textual content, otherwise base64 string
+        if (bodyStream.size() == 0) return "";
+        boolean isTextual = false;
+        if (headersStr != null && !headersStr.trim().isEmpty()) {
+            for (String header : headersStr.split("\r\n")) {
+                String[] kv = header.trim().split(":");
+                if (kv.length == 2 && "Content-Type".equalsIgnoreCase(kv[0].trim())) {
+                    String cttType = kv[1].trim().toLowerCase();
+                    if (cttType.startsWith("text") || "application/javascript".equals(cttType) || "application/xhtml+xml".equals(cttType) ||
+                            "application/json".equals(cttType) || "application/ld+json".equals(cttType) || "application/xml".equals(cttType)
+                            || "application/x-www-form-urlencoded".equals(cttType)) {
+                        isTextual = true;
+                        break;
+                    }
+                }
+            }
         }
-
-        if (!nobody) {
-            writeFinalChunk();
+        if (isTextual) {
+            return new String(bodyStream.toByteArray(), StandardCharsets.UTF_8);
+        } else {
+            return Base64.getEncoder().encodeToString(bodyStream.toByteArray());
         }
-
     }
 
     private void completeHandleVirusScan() throws Exception {
@@ -827,7 +859,7 @@ public class ClientHandler implements Runnable {
 
         outHttpResponseHeaders.write(SERVER_HEADER.getBytes(StandardCharsets.UTF_8));
 
-        StringBuilder responseMessage = new StringBuilder("");
+        StringBuilder responseMessage = new StringBuilder();
 
         if (threatName != null) {
 
